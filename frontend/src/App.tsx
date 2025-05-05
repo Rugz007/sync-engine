@@ -1,30 +1,24 @@
+import { Transaction, useTaskManager } from "./hooks";
 import "./App.css";
-
+import { v4 as uuid } from "uuid";
 import React, { useState, useEffect } from "react";
 
-// Define the shape of a Task
-interface Task {
-  id: number;
-  content: string;
-  transactionId?: number;
-  isOptimistic?: boolean;
-  isOptimisitcallyDeleted?: boolean;
-}
-
 // Define the shape of a Transaction
-interface Transaction {
-  id: number;
-  task_id: number;
-  operation: "create" | "update" | "delete" | "bootstrap";
-  content: string;
-  lastTransactionId?: number;
-}
 
 const App: React.FC = () => {
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState<string>("");
-  const [ws, setWs] = useState<WebSocket | null>(null);
-  const [latestTransactionId, setLatestTransactionId] = useState<number>(0);
+  const {
+    tasks,
+    setTasks,
+    handleAddTask,
+    handleUpdateTask,
+    handleDeleteTask,
+    resolveOptimisticAdd,
+    resolveOptimisticUpdate,
+    resolveOptimisticDelete,
+    latestTransactionId,
+    setLatestTransactionId,
+  } = useTaskManager();
   const fetchTasks = async () => {
     try {
       const response = await fetch("http://localhost:8080/tasks/read"); // Adjust to your API endpoint
@@ -67,7 +61,6 @@ const App: React.FC = () => {
       console.error("WebSocket error:", error);
     };
 
-    setWs(socket);
 
     return () => {
       if (socket) {
@@ -93,115 +86,13 @@ const App: React.FC = () => {
         setLatestTransactionId(transaction.id);
       }
       if (transaction.operation === "create") {
-        setTasks((prevTasks) => {
-          const existingTask = prevTasks.find(
-            (task) => task.transactionId === transaction.id
-          );
-          if (existingTask) {
-            return prevTasks.map((task) =>
-              task.transactionId === transaction.id
-                ? { ...task, isOptimistic: false, id: transaction.task_id }
-                : task
-            );
-          }
-          return [
-            ...prevTasks,
-            { id: transaction.task_id, content: transaction.content },
-          ];
-        });
+        resolveOptimisticAdd(transaction);
       } else if (transaction.operation === "update") {
-        setTasks((prevTasks) =>
-          prevTasks.map((task) =>
-            task.id === transaction.task_id
-              ? { ...task, content: transaction.content, isOptimistic: false }
-              : task
-          )
-        );
+        resolveOptimisticUpdate(transaction);
       } else if (transaction.operation === "delete") {
-        setTasks((prevTasks) =>
-          prevTasks.filter(
-            (task) =>
-              task.transactionId !== transaction.id &&
-              task.id !== transaction.task_id
-          )
-        );
+        resolveOptimisticDelete(transaction);
       }
     });
-  };
-
-  const handleAddTask = async () => {
-    if (!newTask) return;
-
-    // Send HTTP request to create a new task and log a transaction
-    await fetch("http://localhost:8080/tasks", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Transaction-ID": (latestTransactionId + 1).toString(),
-      },
-      body: JSON.stringify({ content: newTask }),
-    });
-
-    setNewTask("");
-    setTasks((prevTasks) => [
-      ...prevTasks,
-      {
-        id: Math.random(),
-        content: newTask,
-        isOptimistic: true,
-        transactionId: latestTransactionId + 1,
-      },
-    ]);
-    setLatestTransactionId((prevId) => prevId + 1);
-  };
-
-  const handleUpdateTask = async (taskId: number, updatedContent: string) => {
-    // Send HTTP request to update task and log a transaction
-    await fetch("http://localhost:8080/tasks/update", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Transaction-ID": (latestTransactionId + 1).toString(),
-      },
-      body: JSON.stringify({ id: taskId, content: updatedContent }),
-    });
-
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              content: updatedContent,
-              isOptimistic: true,
-              transactionId: latestTransactionId + 1,
-            }
-          : task
-      )
-    );
-    setLatestTransactionId((prevId) => prevId + 1);
-  };
-
-  const handleDeleteTask = async (taskId: number) => {
-    // Send HTTP request to delete task and log a transaction
-    await fetch(`http://localhost:8080/tasks/delete?id=${taskId}`, {
-      method: "DELETE",
-      headers: {
-        "Transaction-ID": (latestTransactionId + 1).toString(),
-      },
-    });
-
-    setLatestTransactionId((prevId) => prevId + 1);
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              isOptimisitcallyDeleted: true,
-              transactionId: latestTransactionId + 1,
-            }
-          : task
-      )
-    );
   };
 
   return (
@@ -223,7 +114,15 @@ const App: React.FC = () => {
           className="w-full max-w-md px-4 py-2 rounded-md text-white border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
         <button
-          onClick={handleAddTask}
+          onClick={() => {
+            const newID = uuid();
+            handleAddTask({
+              id: newID,
+              content: newTask,
+              isOptimistic: true,
+            });
+            setNewTask("");
+          }}
           className="px-4 py-2  text-white font-semibold rounded-md"
         >
           Add Task
@@ -233,7 +132,7 @@ const App: React.FC = () => {
       <h2 className="text-2xl font-semibold mb-4">Tasks</h2>
       <ul className="space-y-4">
         {tasks
-          .filter((task) => !task.isOptimisitcallyDeleted)
+          .filter((task) => !task.isOptimisticallyDeleted)
           .map((task) => (
             <li
               key={task.id}
